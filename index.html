@@ -1,0 +1,360 @@
+<!doctype><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Odyssey.js Slides</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="icon" type="image/x-icon" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+  <link rel="icon" type="image/png" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+
+  <link rel="stylesheet" href="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/themes/css/cartodb.css">
+  <link rel="stylesheet" href="http://cartodb.github.io/odyssey.js/sandbox/css/slides.css">
+  <script src="http://cartodb.github.io/odyssey.js/vendor/modernizr-2.6.2.min.js"></script>
+</head>
+<body>
+  <div id="map" style="width: 100%; height: 100%;"></div>
+
+  <div id="slides_container" style="display:block;">
+    <div id="dots"></div>
+
+    <div id="slides"></div>
+
+    <ul id="navButtons">
+      <li><a class="prev"></a></li>
+      <li><a class="next"></a></li>
+    </ul>
+  </div>
+
+  <div id="credits">
+    <span class="title" id="title">Title</span>
+    <span class="author"><strong id="author">By Name using</strong> <a href="http://cartodb.github.io/odyssey.js/">Odyssey.js</a><span>
+  </span></span></div>
+
+  <script src="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/cartodb.js"></script>
+  <script src="http://cartodb.github.io/odyssey.js/dist/odyssey.js" charset="UTF-8"></script>
+
+  <script>
+    var resizePID;
+
+    function clearResize() {
+      clearTimeout(resizePID);
+      resizePID = setTimeout(function() { adjustSlides(); }, 100);
+    }
+
+    if (!window.addEventListener) {
+      window.attachEvent("resize", function load(event) {
+        clearResize();
+      });
+    } else {
+      window.addEventListener("resize", function load(event) {
+        clearResize();
+      });
+    }
+
+    function adjustSlides() {
+      var container = document.getElementById("slides_container"),
+          slide = document.querySelectorAll('.selected_slide')[0];
+
+      if (slide) {
+        if (slide.offsetHeight+169+40+80 >= window.innerHeight) {
+          container.style.bottom = "80px";
+
+          var h = container.offsetHeight;
+
+          slide.style.height = h-169+"px";
+          slide.classList.add("scrolled");
+        } else {
+          container.style.bottom = "auto";
+          container.style.minHeight = "0";
+
+          slide.style.height = "auto";
+          slide.classList.remove("scrolled");
+        }
+      }
+    }
+
+    var resizeAction = O.Action(function() {
+      function imageLoaded() {
+        counter--;
+
+        if (counter === 0) {
+          adjustSlides();
+        }
+      }
+      var images = $('img');
+      var counter = images.length;
+
+      images.each(function() {
+        if (this.complete) {
+          imageLoaded.call( this );
+        } else {
+          $(this).one('load', imageLoaded);
+        }
+      });
+    });
+
+    function click(el) {
+      var element = O.Core.getElement(el);
+      var t = O.Trigger();
+
+      // TODO: clean properly
+      function click() {
+        t.trigger();
+      }
+
+      if (element) element.onclick = click;
+
+      return t;
+    }
+
+    O.Template({
+      init: function() {
+        var seq = O.Triggers.Sequential();
+
+        var baseurl = this.baseurl = 'http://{s}.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+        var map = this.map = L.map('map').setView([0, 0.0], 4);
+        var basemap = this.basemap = L.tileLayer(baseurl, {
+          attribution: 'data OSM - map CartoDB'
+        }).addTo(map);
+
+        // enanle keys to move
+        O.Keys().on('map').left().then(seq.prev, seq)
+        O.Keys().on('map').right().then(seq.next, seq)
+
+        click(document.querySelectorAll('.next')).then(seq.next, seq)
+        click(document.querySelectorAll('.prev')).then(seq.prev, seq)
+
+        var slides = O.Actions.Slides('slides');
+        var story = O.Story()
+
+        this.story = story;
+        this.seq = seq;
+        this.slides = slides;
+        this.progress = O.UI.DotProgress('dots').count(0);
+      },
+
+      update: function(actions) {
+        var self = this;
+
+        if (!actions.length) return;
+
+        this.story.clear();
+
+        if (this.baseurl && (this.baseurl !== actions.global.baseurl)) {
+          this.baseurl = actions.global.baseurl || 'http://0.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+
+          this.basemap.setUrl(this.baseurl);
+        }
+
+        if (this.cartoDBLayer && ("http://"+self.cartoDBLayer.options.user_name+".cartodb.com/api/v2/viz/"+self.cartoDBLayer.options.layer_definition.stat_tag+"/viz.json" !== actions.global.vizjson)) {
+          this.map.removeLayer(this.cartoDBLayer);
+
+          this.cartoDBLayer = null;
+          this.created = false;
+        }
+
+        if (actions.global.vizjson && !this.cartoDBLayer) {
+          if (!this.created) { // sendCode debounce < vis loader
+            cdb.vis.Loader.get(actions.global.vizjson, function(vizjson) {
+              self.map.fitBounds(vizjson.bounds);
+
+              cartodb.createLayer(self.map, vizjson)
+                .done(function(layer) {
+                  self.cartoDBLayer = layer;
+
+                  var sublayer = layer.getSubLayer(0),
+                      layer_name = layer.layers[0].options.layer_name,
+                      filter = actions.global.cartodb_filter ? " WHERE "+actions.global.cartodb_filter : "";
+
+                  sublayer.setSQL("SELECT * FROM "+layer_name+filter)
+
+                  self.map.addLayer(layer);
+
+                  self._resetActions(actions);
+                }).on('error', function(err) {
+                  console.log("some error occurred: " + err);
+                });
+            });
+
+            this.created = true;
+          }
+
+          return;
+        }
+
+        this._resetActions(actions);
+      },
+
+      _resetActions: function(actions) {
+        // update footer title and author
+        var title_ = actions.global.title === undefined ? '' : actions.global.title,
+            author_ = actions.global.author === undefined ? 'Using' : 'By '+actions.global.author+' using';
+
+        document.getElementById('title').innerHTML = title_;
+        document.getElementById('author').innerHTML = author_;
+        document.title = title_ + " | " + author_ +' Odyssey.js';
+
+        var sl = actions;
+
+        document.getElementById('slides').innerHTML = ''
+        this.progress.count(sl.length);
+
+        // create new story
+        for(var i = 0; i < sl.length; ++i) {
+          var slide = sl[i];
+          var tmpl = "<div class='slide' style='diplay:none'>";
+
+          tmpl += slide.html();
+          tmpl += "</div>";
+          document.getElementById('slides').innerHTML += tmpl;
+
+          this.progress.step(i).then(this.seq.step(i), this.seq)
+
+          var actions = O.Parallel(
+            this.slides.activate(i),
+            slide(this),
+            this.progress.activate(i),
+            resizeAction
+          );
+
+          actions.on("finish.app", function() {
+            adjustSlides();
+          });
+
+          this.story.addState(
+            this.seq.step(i),
+            actions
+          )
+        }
+
+        this.story.go(this.seq.current());
+      },
+
+      changeSlide: function(n) {
+        this.seq.current(n);
+      }
+    });
+  </script>
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-20934186-21', 'cartodb.github.io');
+    ga('send', 'pageview');
+  </script>
+
+  <script type="text/javascript" src="http://fast.fonts.net/jsapi/3af16084-ba56-49ca-b37d-0b49b59e1927.js"></script>
+
+<script id="md_template" type="text/template">```
+-title: "Odyssey example FTW"
+-author: "CartoDB"
+```
+
+#Astronomy in China 
+```
+L.marker([39.9139, 116.3917]).actions.addRemove(S.map)
+- center: [39.9139, 116.3917]
+- zoom: 6
+```
+![Sundial](http://adler.minisisinc.com/ADLER_DIGITAL/OBJECTS/W169/W169%20Ga.jpg)
+This sundial and compass was created in 1800s Beijing, where it would fit in the palm of someone’s hand. The 1800s were a time of both great excitement and great tumult, with China embroiled in multiple wars with the British and French forces. 
+![Chinese Constellations](http://adler.minisisinc.com/ADLER_DIGITAL/OBJECTS/P215/WOP_215.jpg)
+
+#1860 Solar Eclipse 
+```
+L.marker([42.8694, -2.8139]).actions.addRemove(S.map)
+- center: [42.8694, -2.8139]
+- zoom: 7
+```
+In July of 1860, a total solar eclipse was visible from Spain, and was captured photographically for the first time in history. 
+![Eclipse](http://upload.wikimedia.org/wikipedia/commons/f/f2/BNE.Astronomia.Eclipse.total.Coello.18.julio.1860.jpg)
+
+#The Haiyantang Zodiac Fountain
+``
+L.marker([39.9139, 116.3917]).actions.addRemove(S.map)
+- center: [39.9139, 116.3917]
+- zoom: 6
+``
+In the fall of this same year, Anglo-French troops sacked Beijing’s Old Summer Palace, looting the Haiyantang Zodiac fountain of its 12 large bronze sculptures representing the animals of the Chinese zodiac. Seven of the twelve original zodiac heads have been recovered; the rest are lost to history.
+
+#Circle of Animals
+```
+- center: [41.8664, -87.6067]
+L.marker([41.8664, -87.6067]).actions.addRemove(S.map)
+- zoom: 9
+```
+![Circle of Animals](http://static.squarespace.com/static/50f07ce8e4b07454d6dd2f2f/t/5419d5f0e4b04f685d6f462a/1410979316374/?format=500w)
+
+A new set of sculptures created by contemporary Chinese artist Ai Wei Wei, “Circle of Animals/Zodiac heads”, represents these lost zodiac animals. This traveling exhibit is shown in its current home, installed in a semicircle facing the Adler Planetarium in Chicago, IL. 
+
+![Circle of Animals 2](http://static.squarespace.com/static/50f07ce8e4b07454d6dd2f2f/t/5419d5cae4b029fe6b48f077/1410979283180/?format=500w)
+
+#The Adler Planetarium
+```
+- center: [41.8664, -87.6067]
+L.marker([41.8664, -87.6067]).actions.addRemove(S.map)
+- zoom: 10
+```
+
+![Adler](http://upload.wikimedia.org/wikipedia/commons/1/11/Adler_planetarium.jpg)
+
+The Adler Planetarium is home to the largest public collection of historical astronomical artifacts in the United States, as well as to an astronomy department conducting modern astronomical research.
+
+#Adler's Zodiac Plaques
+```
+- center: [41.8664, -87.6067]
+L.marker([41.8664, -87.6067]).actions.addRemove(S.map)
+- zoom: 11
+```
+![Pisces](http://2.bp.blogspot.com/_zoA-ZomYOKQ/SNUfJ8fje-I/AAAAAAAAJKI/oNe3GuUksBI/s400/Planetarium-pisces.jpg)
+The Adler Planetarium is similarly adorned with zodiac sculptures, representing the western, rather than eastern, zodiac. 
+
+#East Meets West
+```
+- center: [41.8664, -87.6067]
+L.marker([41.8664, -87.6067]).actions.addRemove(S.map)
+- zoom: 11
+```
+![Zodiac](http://adler.minisisinc.com/ADLER_DIGITAL/OBJECTS/P35L/WOP-35L.jpg)
+
+While there are parallels between the eastern and western zodiacs, they are not exactly comparable: the eastern zodiac operates on multiple time cycles from years to days to hours, while the western zodiac goes by months that correspond to specific constellations.
+
+![Zodiac 2](http://adler.minisisinc.com/ADLER_DIGITAL/OBJECTS/P164/P164.jpg)
+
+#The Iannelli Zodiac Plaques
+```
+- center: [41.8664, -87.6067]
+L.marker([41.8664, -87.6067]).actions.addRemove(S.map)
+- zoom: 11
+```
+![Sagittarius](http://static.squarespace.com/static/50f07ce8e4b07454d6dd2f2f/t/51896320e4b047b72ae92b87/1367958306193/iannelli_sagittarius.jpg?format=500w)
+The Adler’s zodiac reliefs depict both the actual stars of the constellation as they would be seen in the sky, as well as the Greek mythological figure associated with that constellation. These reliefs were created specifically by the architect, sculptor and industrial designer Iannelli.
+
+#Modern Constellations
+```
+- center: [39.8282, 8.5795]
+- zoom: 1
+```
+Astronomy and astrology have long since diverged, with modern astronomy now focused on the physical workings of the universe. In modern astronomy, constellations divide the sky into regions akin to states or countries. The familiar constellations of the zodiac reside along the ecliptic, or the path the sun appears to take in the sky, and like all constellations are home to myriad new astronomical discoveries. 
+
+#Sagittarius: Home to our Galactic Center
+![Sagittarius const](http://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Sagittarius_constellation_detail_long_exposure.jpg/1599px-Sagittarius_constellation_detail_long_exposure.jpg)
+The constellation of Sagittarius is home to the very center of our Galaxy, the Milky Way. 
+
+![Sagittarius](http://static.squarespace.com/static/50f07ce8e4b07454d6dd2f2f/t/51896320e4b047b72ae92b87/1367958306193/iannelli_sagittarius.jpg?format=500w)
+
+#Sag A*
+```
+- center: [34.0722, -118.4441]
+L.marker([41.8664, -87.6067]).actions.addRemove(S.map)
+- zoom: 8
+```
+![Sag A star](http://mintaka.sdsu.edu/faculty/wfw/CLASSES/ASTR640/sagA-movie.gif)
+Over the past several years, astronomers have mapped the motions of stars towards the Galactic center, revealing the presence of a supermassive black hole. Although our Galaxy’s central black hole does not emit light by its nature, the motions of these stars indicate its existence via its gravitational influence on their motions. 
+
+
+</script></body></html>
